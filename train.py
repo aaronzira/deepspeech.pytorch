@@ -11,6 +11,7 @@ from warpctc_pytorch import CTCLoss
 from data.data_loader import AudioDataLoader, SpectrogramDataset
 from decoder import ArgMaxDecoder
 from model import DeepSpeech, supported_rnns
+from spell import correction
 
 parser = argparse.ArgumentParser(description='DeepSpeech training')
 parser.add_argument('--train_manifest', metavar='DIR',
@@ -81,8 +82,12 @@ def main():
     args = parser.parse_args()
     save_folder = args.save_folder
 
-    loss_results, cer_results, wer_results = None, None, None
-    training_time_results, train_sample_cer_results, train_sample_wer_results = None, None, None
+    loss_results, cer_results, wer_results = torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
+    lm_cer_results, lm_wer_results = torch.Tensor(args.epochs),torch.Tensor(args.epochs)
+    train_time_results, train_sample_cer_results, train_sample_wer_results = \
+            torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
+    val_loss_results, train_sample_lm_cer_results, train_sample_lm_wer_results = \
+            torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
     if args.visdom:
         from visdom import Visdom
         viz = Visdom()
@@ -90,23 +95,19 @@ def main():
         opts = [dict(title='Loss', ylabel='Loss', xlabel='Epoch'),
                 dict(title='Val WER', ylabel='WER', xlabel='Epoch'),
                 dict(title='Val CER', ylabel='CER', xlabel='Epoch'),
-<<<<<<< HEAD
                 dict(title='Training Time', ylabel='Hours', xlabel='Epoch'),
-=======
-                dict(title='Training Time', ylabel='Seconds', xlabel='Epoch'),
->>>>>>> 62addca8482b2957980c71a177439f0848734370
                 dict(title='Train (subset) WER', ylabel='WER', xlabel='Epoch'),
                 dict(title='Train (subset) CER', ylabel='CER', xlabel='Epoch')]
 
         viz_windows = [None, None, None, None, None, None]
         loss_results, cer_results, wer_results, \
-            training_time_results, train_sample_cer_results, train_sample_wer_results = \
+            train_time_results, train_sample_cer_results, train_sample_wer_results = \
                 torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs), \
                 torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
         epochs = torch.arange(1, args.epochs + 1)
-<<<<<<< HEAD
+
     if args.tensorboard:
-        from logger import Logger
+        from logger import TensorBoardLogger
         try:
             os.makedirs(args.log_dir)
         except OSError as e:
@@ -121,11 +122,7 @@ def main():
                         raise
             else:
                 raise
-        loss_results, cer_results, wer_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
-            args.epochs)
-        logger = Logger(args.log_dir)
-=======
->>>>>>> 62addca8482b2957980c71a177439f0848734370
+        logger = TensorBoardLogger(args.log_dir)
 
     try:
         os.makedirs(save_folder)
@@ -155,7 +152,6 @@ def main():
                                       normalize=True, augment=False)
     train_loader = AudioDataLoader(train_dataset, batch_size=args.batch_size,
                                    num_workers=args.num_workers)
-                                  num_workers=args.num_workers)
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size/2,
                                   num_workers=args.num_workers)
     train_sample_loader = AudioDataLoader(train_sample_dataset, batch_size=args.batch_size/2,
@@ -207,13 +203,26 @@ def main():
                 )
         if args.tensorboard and package['loss_results'] is not None and start_epoch > 0:  # Add previous scores to tensorboard logs
             epoch = start_epoch
-            loss_results, cer_results, wer_results = package['loss_results'], package['cer_results'], package[
-                'wer_results']
+            loss_results, cer_results, wer_results = package['loss_results'], package['cer_results'], package['wer_results']
+            lm_cer_results, lm_wer_results = package['lm_cer_results'], package['lm_wer_results']
+            val_loss_results, train_sample_cer_results, train_sample_wer_results = \
+                    package['val_loss_results'], package['train_sample_cer_results'], package['train_sample_wer_results']
+            train_time_results, train_sample_lm_cer_results, train_sample_lm_wer_results = \
+                    package['train_time_results'], package['train_sample_lm_cer_results'], package['train_sample_lm_wer_results']
+
             for i in range(len(loss_results)):
                 info = {
                     'Avg Train Loss': loss_results[i],
-                    'Avg WER': wer_results[i],
-                    'Avg CER': cer_results[i]
+                    'Avg Val WER': wer_results[i],
+                    'Avg Val CER': cer_results[i],
+                    'Avg Val Loss': val_loss_results[i],
+                    'Avg LM-Corrected Val WER': lm_wer_results[i],
+                    'Avg LM-Corrected Val CER': lm_cer_results[i],
+                    'Avg Train Time': train_time_results[i],
+                    'Avg Train WER': train_sample_wer_results[i],
+                    'Avg Train CER': train_sample_cer_results[i],
+                    'Avg LM-Corrected Train WER': train_sample_lm_wer_results[i],
+                    'Avg LM-Corrected Train CER': train_sample_lm_cer_results[i]
                 }
                 for tag, val in info.items():
                     logger.scalar_summary(tag, val, i+1)
@@ -280,6 +289,7 @@ def main():
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
+            train_time = (start-end)/3600.
             if not args.silent:
                 print('Epoch: [{0}][{1}/{2}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -291,21 +301,28 @@ def main():
                 file_path = '%s/deepspeech_checkpoint_epoch_%d_iter_%d.pth.tar' % (save_folder, epoch + 1, i + 1)
                 print("Saving checkpoint model to %s" % file_path)
                 torch.save(DeepSpeech.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
-                                                loss_results=loss_results, wer_results=wer_results, cer_results=cer_results,
-                                                training_time_results=training_time_results,
+                                                loss_results=loss_results,
+                                                train_time_results=train_time_results,
+                                                wer_results=wer_results, cer_results=cer_results,
+                                                lm_wer_results=lm_wer_results, lm_cer_results=lm_cer_results,
                                                 train_sample_wer_results=train_sample_wer_results,
                                                 train_sample_cer_results=train_sample_cer_results,
+                                                train_sample_lm_wer_results=train_sample_lm_wer_results,
+                                                train_sample_lm_cer_results=train_sample_lm_cer_results,
                                                 avg_loss=avg_loss),
                            file_path)
+            del loss
+            del out
         avg_loss /= len(train_loader)
 
-        print('Training Summary Epoch: [{0}]\t'
+        print('Training Summary Epoch: [{0:02d}]\t'
               'Average Loss {loss:.3f}\t'.format(
             epoch + 1, loss=avg_loss))
 
         start_iter = 0  # Reset start iteration for next epoch
+        val_loss = 0
         total_cer, total_wer = 0, 0
-        train_sample_total_cer, train_sample_total_wer = 0, 0
+        total_lm_cer, total_lm_wer = 0, 0
         model.eval()
 
         for i, (data) in enumerate(test_loader):  # test
@@ -328,78 +345,128 @@ def main():
             seq_length = out.size(0)
             sizes = Variable(input_percentages.mul_(int(seq_length)).int(), volatile=True)
 
+            # val loss
+            targets = Variable(targets, requires_grad=False)
+            target_sizes = Variable(target_sizes, requires_grad=False)
+            loss = criterion(out, targets, sizes, target_sizes)
+            loss = loss / inputs.size(0)  # average the loss by minibatch
+            loss_sum = loss.data.sum()
+            if loss_sum == inf or loss_sum == -inf:
+                print("WARNING: received an inf loss, setting loss value to 0")
+                loss_value = 0
+            else:
+                loss_value = loss.data[0]
+            val_loss += loss_value
+
             decoded_output = decoder.decode(out.data, sizes)
+            corrected_output = [correction(output).upper() for output in decoded_output]
             target_strings = decoder.process_strings(decoder.convert_to_strings(split_targets))
             wer, cer = 0, 0
+            lm_wer, lm_cer = 0, 0
             for x in range(len(target_strings)):
                 wer += decoder.wer(decoded_output[x], target_strings[x]) / float(len(target_strings[x].split()))
                 cer += decoder.cer(decoded_output[x], target_strings[x]) / float(len(target_strings[x]))
+                lm_wer += decoder.wer(corrected_output[x], target_strings[x]) / float(len(target_strings[x].split()))
+                lm_cer += decoder.cer(corrected_output[x], target_strings[x]) / float(len(target_strings[x]))
             total_cer += cer
             total_wer += wer
+            total_lm_cer += lm_cer
+            total_lm_wer += lm_wer
 
             if args.cuda:
                 torch.cuda.synchronize()
+            del loss
+            del out
         wer = total_wer / len(test_loader.dataset)
         cer = total_cer / len(test_loader.dataset)
+        lm_wer = total_lm_wer / len(test_loader.dataset)
+        lm_cer = total_lm_cer / len(test_loader.dataset)
         wer *= 100
         cer *= 100
+        lm_wer *= 100
+        lm_cer *= 100
+        avg_val_loss = val_loss / len(test_loader.dataset)
 
-        print('Validation Summary Epoch: [{0}]\t'
+        print('Validation Summary Epoch: [{0:02d}]\t\t'
               'Average WER {wer:.3f}\t'
               'Average CER {cer:.3f}\t'.format(
             epoch + 1, wer=wer, cer=cer))
+        print('LM-Corrected Validation Summary:\t'
+              'Average WER {wer:.3f}\t'
+              'Average CER {cer:.3f}\t'.format(
+            wer=lm_wer, cer=lm_cer))
 
         # train sample to monitor WER, CER
-        for i, (train_sample_data) in enumerate(train_sample_loader):
-            train_sample_inputs, train_sample_targets, train_sample_input_percentages, train_sample_target_sizes = train_sample_data
+        train_sample_total_cer, train_sample_total_wer = 0, 0
+        train_sample_lm_total_cer, train_sample_lm_total_wer = 0, 0
+        for i, (data) in enumerate(train_sample_loader):
+            inputs, targets, input_percentages, target_sizes = data
 
-            train_sample_inputs = Variable(train_sample_inputs)
+            inputs = Variable(inputs)
 
             # unflatten targets
-            train_sample_split_targets = []
-            train_sample_offset = 0
-            for train_sample_size in train_sample_target_sizes:
-                train_sample_split_targets.append(train_sample_targets[train_sample_offset:train_sample_offset + train_sample_size])
-                train_sample_offset += train_sample_size
+            split_targets = []
+            offset = 0
+            for size in target_sizes:
+                split_targets.append(targets[offset:offset + size])
+                offset += size
 
             if args.cuda:
-                train_sample_inputs = train_sample_inputs.cuda()
+                inputs = inputs.cuda()
 
-            train_sample_out = model(train_sample_inputs)
-            train_sample_out = train_sample_out.transpose(0, 1)  # TxNxH
-            train_sample_seq_length = train_sample_out.size(0)
-            train_sample_sizes = Variable(train_sample_input_percentages.mul_(int(train_sample_seq_length)).int())
+            out = model(inputs)
+            out = out.transpose(0, 1)  # TxNxH
+            seq_length = out.size(0)
+            sizes = Variable(input_percentages.mul_(int(seq_length)).int())
 
-            train_sample_decoded_output = decoder.decode(train_sample_out.data, train_sample_sizes)
-            train_sample_target_strings = decoder.process_strings(decoder.convert_to_strings(train_sample_split_targets))
+            decoded_output = decoder.decode(out.data, sizes)
+            corrected_output = [correction(output).upper() for output in decoded_output]
+            target_strings = decoder.process_strings(decoder.convert_to_strings(split_targets))
             train_sample_wer, train_sample_cer = 0, 0
-            for x in range(len(train_sample_target_strings)):
-                train_sample_wer += decoder.wer(train_sample_decoded_output[x], train_sample_target_strings[x]) / float(len(train_sample_target_strings[x].split()))
-                train_sample_cer += decoder.cer(train_sample_decoded_output[x], train_sample_target_strings[x]) / float(len(train_sample_target_strings[x]))
+            train_sample_lm_wer, train_sample_lm_cer = 0, 0
+            for x in range(len(target_strings)):
+                train_sample_wer += decoder.wer(decoded_output[x], target_strings[x]) / float(len(target_strings[x].split()))
+                train_sample_cer += decoder.cer(decoded_output[x], target_strings[x]) / float(len(target_strings[x]))
+                train_sample_lm_wer += decoder.wer(corrected_output[x], target_strings[x]) / float(len(target_strings[x].split()))
+                train_sample_lm_cer += decoder.cer(corrected_output[x], target_strings[x]) / float(len(target_strings[x]))
             train_sample_total_cer += train_sample_cer
             train_sample_total_wer += train_sample_wer
+            train_sample_lm_total_cer += train_sample_lm_cer
+            train_sample_lm_total_wer += train_sample_lm_wer
 
         train_sample_wer = train_sample_total_wer / len(train_sample_loader.dataset)
         train_sample_cer = train_sample_total_cer / len(train_sample_loader.dataset)
+        train_sample_lm_wer = train_sample_lm_total_wer / len(train_sample_loader.dataset)
+        train_sample_lm_cer = train_sample_lm_total_cer / len(train_sample_loader.dataset)
         train_sample_wer *= 100
         train_sample_cer *= 100
+        train_sample_lm_wer *= 100
+        train_sample_lm_cer *= 100
 
-        print('Train Sample Summary Epoch: [{0}]\t'
+        loss_results[epoch] = avg_loss
+        wer_results[epoch] = wer
+        cer_results[epoch] = cer
+        val_loss_results[epoch] = val_loss
+        lm_wer_results[epoch] = lm_wer
+        lm_cer_results[epoch] = lm_cer
+        train_time_results[epoch] = train_time
+        train_sample_wer_results[epoch] = train_sample_wer
+        train_sample_cer_results[epoch] = train_sample_cer
+        train_sample_lm_wer_results[epoch] = train_sample_lm_wer
+        train_sample_lm_cer_results[epoch] = train_sample_lm_cer
+
+        print('Train Sample Summary Epoch: [{0:02d}]\t'
               'Average WER {wer:.3f}\t'
               'Average CER {cer:.3f}\t'.format(
             epoch + 1, wer=train_sample_wer, cer=train_sample_cer))
+        print('LM-Corrected Train Sample Summary:\t'
+              'Average WER {wer:.3f}\t'
+              'Average CER {cer:.3f}\t'.format(
+            wer=train_sample_lm_wer, cer=train_sample_lm_cer))
 
 
         if args.visdom:
-            loss_results[epoch] = avg_loss
-            wer_results[epoch] = wer
-            cer_results[epoch] = cer
-            training_time_results[epoch] = (end-start)/3600
-            train_sample_wer_results[epoch] = train_sample_wer
-            train_sample_cer_results[epoch] = train_sample_cer
-            train_sample_wer_results[epoch] = train_sample_wer
-            train_sample_cer_results[epoch] = train_sample_cer
-            epoch += 1
+            #epoch += 1
             x_axis = epochs[0:epoch]
             y_axis = [loss_results[0:epoch], wer_results[0:epoch], \
                         cer_results[0:epoch], training_time_results[0:epoch], \
@@ -419,13 +486,18 @@ def main():
                         update='replace',
                     )
         if args.tensorboard:
-            loss_results[epoch] = avg_loss
-            wer_results[epoch] = wer
-            cer_results[epoch] = cer
             info = {
                 'Avg Train Loss': avg_loss,
                 'Avg WER': wer,
-                'Avg CER': cer
+                'Avg CER': cer,
+                'Avg Val Loss': val_loss,
+                'Avg LM-Corrected Val WER': lm_wer,
+                'Avg LM-Corrected Val CER': lm_cer,
+                'Avg Train Time': train_time,
+                'Avg Train WER': train_sample_wer,
+                'Avg Train CER': train_sample_cer,
+                'Avg LM-Corrected Train WER': train_sample_lm_wer,
+                'Avg LM-Corrected Train CER': train_sample_lm_cer
             }
             for tag, val in info.items():
                 logger.scalar_summary(tag, val, epoch+1)
@@ -438,10 +510,14 @@ def main():
         if args.checkpoint:
             file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
             torch.save(DeepSpeech.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
-                                            wer_results=wer_results, cer_results=cer_results,
-                                                training_time_results=training_time_results,
+                                                train_time_results=train_time_results,
+                                                val_loss_results=val_loss_results,
+                                                wer_results=wer_results, cer_results=cer_results,
+                                                lm_wer_results=lm_wer_results, lm_cer_results=lm_cer_results,
                                                 train_sample_wer_results=train_sample_wer_results,
-                                                train_sample_cer_results=train_sample_cer_results),
+                                                train_sample_cer_results=train_sample_cer_results,
+                                                train_sample_lm_wer_results=train_sample_lm_wer_results,
+                                                train_sample_lm_cer_results=train_sample_lm_cer_results),
                        file_path)
         # anneal lr
         optim_state = optimizer.state_dict()

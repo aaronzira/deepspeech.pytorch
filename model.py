@@ -82,16 +82,12 @@ class DeepSpeech(nn.Module):
             nn.Conv2d(32, 32, kernel_size=(21, 11), stride=(2, 1)),
             nn.BatchNorm2d(32),
             nn.Hardtanh(0, 20, inplace=True),
-            nn.Conv2d(32, 96, kernel_size=(21, 11), stride=(2, 1)),
-            nn.BatchNorm2d(96),
-            nn.Hardtanh(0, 20, inplace=True)
         )
         # Based on above convolutions and spectrogram size using conv formula (W - F + 2P)/ S+1
         rnn_input_size = int(math.floor((sample_rate * window_size) / 2) + 1)
         rnn_input_size = int(math.floor(rnn_input_size - 41) / 2 + 1)
         rnn_input_size = int(math.floor(rnn_input_size - 21) / 2 + 1)
-        rnn_input_size = int(math.floor(rnn_input_size - 21) / 2 + 1)
-        rnn_input_size *= 96
+        rnn_input_size *= 32
 
         rnns = []
         rnn = BatchRNN(input_size=rnn_input_size, hidden_size=rnn_hidden_size, rnn_type=rnn_type,
@@ -136,8 +132,11 @@ class DeepSpeech(nn.Module):
 
     @staticmethod
     def serialize(model, optimizer=None, epoch=None, iteration=None, loss_results=None,
-                  cer_results=None, wer_results=None, training_time_results=None,
-                  train_sample_wer_results=None,train_sample_cer_results=None,
+                  val_loss_results=None, train_time_results=None,
+                  cer_results=None, wer_results=None,
+                  lm_cer_results=None, lm_wer_results=None,
+                  train_sample_wer_results=None, train_sample_cer_results=None,
+                  train_sample_lm_wer_results=None, train_sample_lm_cer_results=None,
                   avg_loss=None, meta=None):
         model_is_cuda = next(model.parameters()).is_cuda
         model = model.module if model_is_cuda else model
@@ -160,11 +159,16 @@ class DeepSpeech(nn.Module):
             package['iteration'] = iteration
         if loss_results is not None:
             package['loss_results'] = loss_results
+            package['val_loss_results'] = val_loss_results
+            package['train_time_results'] = train_time_results
             package['cer_results'] = cer_results
             package['wer_results'] = wer_results
-            package['training_time_results'] = training_time_results
+            package['lm_cer_results'] = lm_cer_results
+            package['lm_wer_results'] = lm_wer_results
             package['train_sample_wer_results'] = train_sample_wer_results
             package['train_sample_cer_results'] = train_sample_cer_results
+            package['train_sample_lm_wer_results'] = train_sample_lm_wer_results
+            package['train_sample_lm_cer_results'] = train_sample_lm_cer_results
         if meta is not None:
             package['meta'] = meta
         return package
