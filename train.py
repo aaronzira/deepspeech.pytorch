@@ -8,6 +8,7 @@ import torch
 from torch.autograd import Variable
 from warpctc_pytorch import CTCLoss
 
+from data.bucketing_sampler import BucketingSampler, SpectrogramDatasetWithLength
 from data.data_loader import AudioDataLoader, SpectrogramDataset
 from decoder import ArgMaxDecoder
 from model import DeepSpeech, supported_rnns
@@ -55,10 +56,13 @@ parser.add_argument('--noise_max', default=0.5,
 parser.add_argument('--tensorboard', dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log_dir', default='visualize/deepspeech_final', help='Location of tensorboard log')
 parser.add_argument('--log_params', dest='log_params', action='store_true', help='Log parameter values and gradients')
-parser.set_defaults(cuda=False, silent=False, checkpoint=False, visdom=False, augment=False, tensorboard=False, log_params=False)
-
+parser.add_argument('--no_bucketing', dest='no_bucketing', action='store_false',
+                    help='Turn off bucketing and sample from dataset based on sequence length (smallest to largest)')
+parser.set_defaults(cuda=False, silent=False, checkpoint=False, visdom=False, augment=False, tensorboard=False,
+                    log_params=False, no_bucketing=False)
 def to_np(x):
     return x.data.cpu().numpy()
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -78,11 +82,12 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+
 def main():
     args = parser.parse_args()
     save_folder = args.save_folder
 
-    loss_results, cer_results, wer_results = torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
+    loss_results, cer_results, wer_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(args.epochs)
     lm_cer_results, lm_wer_results = torch.Tensor(args.epochs),torch.Tensor(args.epochs)
     train_time_results, train_sample_cer_results, train_sample_wer_results = \
             torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
@@ -93,19 +98,11 @@ def main():
         viz = Visdom()
 
         opts = [dict(title='Loss', ylabel='Loss', xlabel='Epoch'),
-                dict(title='Val WER', ylabel='WER', xlabel='Epoch'),
-                dict(title='Val CER', ylabel='CER', xlabel='Epoch'),
-                dict(title='Training Time', ylabel='Hours', xlabel='Epoch'),
-                dict(title='Train (subset) WER', ylabel='WER', xlabel='Epoch'),
-                dict(title='Train (subset) CER', ylabel='CER', xlabel='Epoch')]
+                dict(title='WER', ylabel='WER', xlabel='Epoch'),
+                dict(title='CER', ylabel='CER', xlabel='Epoch')]
 
-        viz_windows = [None, None, None, None, None, None]
-        loss_results, cer_results, wer_results, \
-            train_time_results, train_sample_cer_results, train_sample_wer_results = \
-                torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs), \
-                torch.Tensor(args.epochs),torch.Tensor(args.epochs),torch.Tensor(args.epochs)
+        viz_windows = [None, None, None]
         epochs = torch.arange(1, args.epochs + 1)
-
     if args.tensorboard:
         from logger import TensorBoardLogger
         try:
@@ -135,7 +132,6 @@ def main():
 
     with open(args.labels_path) as label_file:
         labels = str(''.join(json.load(label_file)))
-
     audio_conf = dict(sample_rate=args.sample_rate,
                       window_size=args.window_size,
                       window_stride=args.window_stride,
@@ -152,7 +148,7 @@ def main():
                                       normalize=True, augment=False)
     train_loader = AudioDataLoader(train_dataset, batch_size=args.batch_size,
                                    num_workers=args.num_workers)
-    test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size/2,
+    test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
                                   num_workers=args.num_workers)
     train_sample_loader = AudioDataLoader(train_sample_dataset, batch_size=args.batch_size/2,
                                   num_workers=args.num_workers)
@@ -175,7 +171,7 @@ def main():
         package = torch.load(args.continue_from)
         model.load_state_dict(package['state_dict'])
         optimizer.load_state_dict(package['optim_dict'])
-        start_epoch = int(package.get('epoch', None) or 1) - 1  # Python index start at 0 for training
+        start_epoch = int(package.get('epoch', 1)) - 1  # Python index start at 0 for training
         start_iter = package.get('iteration', None)
         if start_iter is None:
             start_epoch += 1  # Assume that we saved a model after an epoch finished, so start at the next epoch.
@@ -183,38 +179,25 @@ def main():
         else:
             start_iter += 1
         avg_loss = int(package.get('avg_loss', 0))
+        loss_results, cer_results, wer_results = package['loss_results'], package[
+                'cer_results'], package['wer_results']
         if args.visdom and \
                         package['loss_results'] is not None and start_epoch > 0:  # Add previous scores to visdom graph
-            epoch = start_epoch
-            loss_results, cer_results, wer_results, \
-                training_time_results, train_sample_wer_results, train_sample_cer_results = \
-                    package['loss_results'],package['cer_results'], \
-                    package['wer_results'],package['training_time_results'], \
-                    package['train_sample_wer_results'], package['train_sample_cer_results']
-            x_axis = epochs[0:epoch]
-            y_axis = [loss_results[0:epoch], wer_results[0:epoch], \
-                        cer_results[0:epoch], training_time_results[0:epoch], \
-                        train_sample_wer_results[0:epoch], train_sample_cer_results[0:epoch]]
+            x_axis = epochs[0:start_epoch]
+            y_axis = [loss_results[0:start_epoch], wer_results[0:start_epoch], cer_results[0:start_epoch]]
             for x in range(len(viz_windows)):
                 viz_windows[x] = viz.line(
                     X=x_axis,
                     Y=y_axis[x],
                     opts=opts[x],
                 )
-        if args.tensorboard and package['loss_results'] is not None and start_epoch > 0:  # Add previous scores to tensorboard logs
-            epoch = start_epoch
-            loss_results, cer_results, wer_results = package['loss_results'], package['cer_results'], package['wer_results']
-            lm_cer_results, lm_wer_results = package['lm_cer_results'], package['lm_wer_results']
-            val_loss_results, train_sample_cer_results, train_sample_wer_results = \
-                    package['val_loss_results'], package['train_sample_cer_results'], package['train_sample_wer_results']
-            train_time_results, train_sample_lm_cer_results, train_sample_lm_wer_results = \
-                    package['train_time_results'], package['train_sample_lm_cer_results'], package['train_sample_lm_wer_results']
-
-            for i in range(len(loss_results)):
+        if args.tensorboard and \
+                        package['loss_results'] is not None and start_epoch > 0:  # Previous scores to tensorboard logs
+            for i in range(start_epoch):
                 info = {
                     'Avg Train Loss': loss_results[i],
-                    'Avg Val WER': wer_results[i],
-                    'Avg Val CER': cer_results[i],
+                    'Avg WER': wer_results[i],
+                    'Avg CER': cer_results[i],
                     'Avg Val Loss': val_loss_results[i],
                     'Avg LM-Corrected Val WER': lm_wer_results[i],
                     'Avg LM-Corrected Val CER': lm_cer_results[i],
@@ -225,7 +208,7 @@ def main():
                     'Avg LM-Corrected Train CER': train_sample_lm_cer_results[i]
                 }
                 for tag, val in info.items():
-                    logger.scalar_summary(tag, val, i+1)
+                    logger.scalar_summary(tag, val, i + 1)
     else:
         avg_loss = 0
         start_epoch = 0
@@ -234,10 +217,11 @@ def main():
         model = torch.nn.DataParallel(model).cuda()
 
     print(model)
+    print("Number of parameters: %d" % DeepSpeech.get_param_size(model))
+
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
-    inf = float("inf")
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
@@ -266,6 +250,7 @@ def main():
             loss = loss / inputs.size(0)  # average the loss by minibatch
 
             loss_sum = loss.data.sum()
+            inf = float("inf")
             if loss_sum == inf or loss_sum == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
@@ -289,7 +274,7 @@ def main():
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
-            train_time = (start-end)/3600.
+            train_time = (end-start)/3600.
             if not args.silent:
                 print('Epoch: [{0}][{1}/{2}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -303,19 +288,18 @@ def main():
                 torch.save(DeepSpeech.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
                                                 loss_results=loss_results,
                                                 train_time_results=train_time_results,
-                                                wer_results=wer_results, cer_results=cer_results,
                                                 lm_wer_results=lm_wer_results, lm_cer_results=lm_cer_results,
                                                 train_sample_wer_results=train_sample_wer_results,
                                                 train_sample_cer_results=train_sample_cer_results,
                                                 train_sample_lm_wer_results=train_sample_lm_wer_results,
                                                 train_sample_lm_cer_results=train_sample_lm_cer_results,
-                                                avg_loss=avg_loss),
+                                                wer_results=wer_results, cer_results=cer_results, avg_loss=avg_loss),
                            file_path)
             del loss
             del out
         avg_loss /= len(train_loader)
 
-        print('Training Summary Epoch: [{0:02d}]\t'
+        print('Training Summary Epoch: [{0}]\t'
               'Average Loss {loss:.3f}\t'.format(
             epoch + 1, loss=avg_loss))
 
@@ -324,7 +308,6 @@ def main():
         total_cer, total_wer = 0, 0
         total_lm_cer, total_lm_wer = 0, 0
         model.eval()
-
         for i, (data) in enumerate(test_loader):  # test
             inputs, targets, input_percentages, target_sizes = data
 
@@ -375,7 +358,6 @@ def main():
 
             if args.cuda:
                 torch.cuda.synchronize()
-            del loss
             del out
         wer = total_wer / len(test_loader.dataset)
         cer = total_cer / len(test_loader.dataset)
@@ -464,13 +446,10 @@ def main():
               'Average CER {cer:.3f}\t'.format(
             wer=train_sample_lm_wer, cer=train_sample_lm_cer))
 
-
         if args.visdom:
-            #epoch += 1
-            x_axis = epochs[0:epoch]
-            y_axis = [loss_results[0:epoch], wer_results[0:epoch], \
-                        cer_results[0:epoch], training_time_results[0:epoch], \
-                        train_sample_wer_results[0:epoch], train_sample_cer_results[0:epoch]]
+            # epoch += 1
+            x_axis = epochs[0:epoch + 1]
+            y_axis = [loss_results[0:epoch + 1], wer_results[0:epoch + 1], cer_results[0:epoch + 1]]
             for x in range(len(viz_windows)):
                 if viz_windows[x] is None:
                     viz_windows[x] = viz.line(
@@ -500,24 +479,23 @@ def main():
                 'Avg LM-Corrected Train CER': train_sample_lm_cer
             }
             for tag, val in info.items():
-                logger.scalar_summary(tag, val, epoch+1)
+                logger.scalar_summary(tag, val, epoch + 1)
             if args.log_params:
                 for tag, value in model.named_parameters():
                     tag = tag.replace('.', '/')
-                    logger.histo_summary(tag, to_np(value), epoch+1)
-                    if value.grad is not None: # Condition inserted because batch_norm RNN_0 weights.grad and bias.grad are None. Check why
-                        logger.histo_summary(tag+'/grad', to_np(value.grad), epoch+1)
+                    logger.histo_summary(tag, to_np(value), epoch + 1)
+                    logger.histo_summary(tag + '/grad', to_np(value.grad), epoch + 1)
         if args.checkpoint:
             file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
             torch.save(DeepSpeech.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                                 train_time_results=train_time_results,
                                                 val_loss_results=val_loss_results,
-                                                wer_results=wer_results, cer_results=cer_results,
                                                 lm_wer_results=lm_wer_results, lm_cer_results=lm_cer_results,
                                                 train_sample_wer_results=train_sample_wer_results,
                                                 train_sample_cer_results=train_sample_cer_results,
                                                 train_sample_lm_wer_results=train_sample_lm_wer_results,
-                                                train_sample_lm_cer_results=train_sample_lm_cer_results),
+                                                train_sample_lm_cer_results=train_sample_lm_cer_results,
+                                            wer_results=wer_results, cer_results=cer_results),
                        file_path)
         # anneal lr
         optim_state = optimizer.state_dict()
@@ -526,6 +504,13 @@ def main():
         print('Learning rate annealed to: {lr:.6f}'.format(lr=optim_state['param_groups'][0]['lr']))
 
         avg_loss = 0
+        if not args.no_bucketing and epoch == 0:
+            print("Switching to bucketing sampler for following epochs")
+            train_dataset = SpectrogramDatasetWithLength(audio_conf=audio_conf, manifest_filepath=args.train_manifest,
+                                                         labels=labels,
+                                                         normalize=True, augment=args.augment)
+            sampler = BucketingSampler(train_dataset)
+            train_loader.sampler = sampler
 
     torch.save(DeepSpeech.serialize(model, optimizer=optimizer), args.final_model_path)
 
