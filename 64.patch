@@ -1,0 +1,32 @@
+From 60ae2794a3d12e61a36c3027870b7b48e9060948 Mon Sep 17 00:00:00 2001
+From: Ryan Leary <ryanleary@gmail.com>
+Date: Wed, 17 May 2017 23:26:12 -0400
+Subject: [PATCH] Fix train continue bug on cuda models. Closes #63
+
+---
+ train.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/train.py b/train.py
+index 15d125a..3efe457 100644
+--- a/train.py
++++ b/train.py
+@@ -129,8 +129,7 @@ def main():
+     optimizer = torch.optim.SGD(parameters, lr=args.lr,
+                                 momentum=args.momentum, nesterov=True)
+     decoder = ArgMaxDecoder(labels)
+-    if args.cuda:
+-        model = torch.nn.DataParallel(model).cuda()
++
+     if args.continue_from:
+         print("Loading checkpoint model %s" % args.continue_from)
+         package = torch.load(args.continue_from)
+@@ -161,6 +160,8 @@ def main():
+         avg_loss = 0
+         start_epoch = 0
+         start_iter = 0
++    if args.cuda:
++        model = torch.nn.DataParallel(model).cuda()
+ 
+     print(model)
+     batch_time = AverageMeter()
