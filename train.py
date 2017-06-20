@@ -299,7 +299,7 @@ def main():
             del out
         avg_loss /= len(train_loader)
 
-        print('Training Summary Epoch: [{0}]\t'
+        print('Training Summary Epoch: [{0:02d}]\t\t'
               'Average Loss {loss:.3f}\t'.format(
             epoch + 1, loss=avg_loss))
 
@@ -370,6 +370,9 @@ def main():
         avg_val_loss = val_loss / len(test_loader.dataset)
 
         print('Validation Summary Epoch: [{0:02d}]\t\t'
+              'Average Loss {loss:.3f}\t'.format(
+            epoch + 1, loss=avg_val_loss))
+        print('Validation Summary:\t\t\t'
               'Average WER {wer:.3f}\t'
               'Average CER {cer:.3f}\t'.format(
             epoch + 1, wer=wer, cer=cer))
