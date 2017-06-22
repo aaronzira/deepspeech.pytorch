@@ -125,6 +125,9 @@ class DeepSpeech(nn.Module):
         model = cls(rnn_hidden_size=package['hidden_size'], nb_layers=package['hidden_layers'],
                     labels=package['labels'], audio_conf=package['audio_conf'],
                     rnn_type=supported_rnns[package['rnn_type']])
+        for k, v in package['state_dict'].copy().items():
+            if k.startswith('rnns.0.batch_norm.'):
+                del package['state_dict'][k]
         model.load_state_dict(package['state_dict'])
         if cuda:
             model = torch.nn.DataParallel(model).cuda()
