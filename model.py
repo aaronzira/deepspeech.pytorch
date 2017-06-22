@@ -135,6 +135,10 @@ class DeepSpeech(nn.Module):
 
     @staticmethod
     def serialize(model, optimizer=None, epoch=None, iteration=None, loss_results=None,
+                  val_loss_results=None, train_time_results=None,
+                  lm_cer_results=None, lm_wer_results=None,
+                  train_sample_wer_results=None, train_sample_cer_results=None,
+                  train_sample_lm_wer_results=None, train_sample_lm_cer_results=None,
                   cer_results=None, wer_results=None, avg_loss=None, meta=None):
         model_is_cuda = next(model.parameters()).is_cuda
         model = model.module if model_is_cuda else model
@@ -159,6 +163,14 @@ class DeepSpeech(nn.Module):
             package['loss_results'] = loss_results
             package['cer_results'] = cer_results
             package['wer_results'] = wer_results
+            package['val_loss_results'] = val_loss_results
+            package['train_time_results'] = train_time_results
+            package['lm_cer_results'] = lm_cer_results
+            package['lm_wer_results'] = lm_wer_results
+            package['train_sample_wer_results'] = train_sample_wer_results
+            package['train_sample_cer_results'] = train_sample_cer_results
+            package['train_sample_lm_wer_results'] = train_sample_lm_wer_results
+            package['train_sample_lm_cer_results'] = train_sample_lm_cer_results
         if meta is not None:
             package['meta'] = meta
         return package
