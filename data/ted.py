@@ -9,9 +9,13 @@ from utils import create_manifest
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description='Processes and downloads TED-LIUMv2 dataset.')
-parser.add_argument("--target_dir", default='TEDLIUM_dataset/', type=str, help="Directory to store the dataset.")
-parser.add_argument("--tar_path", type=str, help="Path to the TEDLIUM_release tar if downloaded (Optional).")
-parser.add_argument('--sample_rate', default=16000, type=int, help='Sample rate')
+parser.add_argument("--target-dir", default='TEDLIUM_dataset/', type=str, help="Directory to store the dataset.")
+parser.add_argument("--tar-path", type=str, help="Path to the TEDLIUM_release tar if downloaded (Optional).")
+parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
+parser.add_argument('--min-duration', default=1, type=int,
+                    help='Prunes training samples shorter than the min duration (given in seconds, default 1)')
+parser.add_argument('--max-duration', default=15, type=int,
+                    help='Prunes training samples longer than the max duration (given in seconds, default 15)')
 args = parser.parse_args()
 
 TED_LIUM_V2_DL_URL = "http://www.openslr.org/resources/19/TEDLIUM_release2.tar.gz"
@@ -116,9 +120,9 @@ def main():
     prepare_dir(test_ted_dir)
     print('Creating manifests...')
 
-    create_manifest(train_ted_dir, 'ted_train')
-    create_manifest(val_ted_dir, 'ted_val')
-    create_manifest(test_ted_dir, 'ted_test')
+    create_manifest(train_ted_dir, 'ted_train_manifest.csv', args.min_duration, args.max_duration)
+    create_manifest(val_ted_dir, 'ted_val_manifest.csv')
+    create_manifest(test_ted_dir, 'ted_test_manifest.csv')
 
 
 if __name__ == "__main__":

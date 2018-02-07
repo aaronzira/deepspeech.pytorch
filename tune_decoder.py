@@ -11,29 +11,29 @@ from decoder import GreedyDecoder, BeamCTCDecoder
 from model import DeepSpeech
 
 parser = argparse.ArgumentParser(description='DeepSpeech transcription')
-parser.add_argument('--model_path', default='models/deepspeech_final.pth.tar',
+parser.add_argument('--model-path', default='models/deepspeech_final.pth',
                     help='Path to model file created by training')
 parser.add_argument('--logits', default="", type=str, help='Path to logits from test.py')
-parser.add_argument('--test_manifest', metavar='DIR',
+parser.add_argument('--test-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='data/test_manifest.csv')
-parser.add_argument('--num_workers', default=16, type=int, help='Number of parallel decodes to run')
-parser.add_argument('--output_path', default="tune_results.json", help="Where to save tuning results")
+parser.add_argument('--num-workers', default=16, type=int, help='Number of parallel decodes to run')
+parser.add_argument('--output-path', default="tune_results.json", help="Where to save tuning results")
 beam_args = parser.add_argument_group("Beam Decode Options", "Configurations options for the CTC Beam Search decoder")
-beam_args.add_argument('--beam_width', default=10, type=int, help='Beam width to use')
-beam_args.add_argument('--lm_path', default=None, type=str,
+beam_args.add_argument('--beam-width', default=10, type=int, help='Beam width to use')
+beam_args.add_argument('--lm-path', default=None, type=str,
                        help='Path to an (optional) kenlm language model for use with beam search (req\'d with trie)')
-beam_args.add_argument('--lm_alpha_from', default=1, type=float, help='Language model weight start tuning')
-beam_args.add_argument('--lm_alpha_to', default=3.2, type=float, help='Language model weight end tuning')
-beam_args.add_argument('--lm_beta_from', default=0.0, type=float,
+beam_args.add_argument('--lm-alpha-from', default=1, type=float, help='Language model weight start tuning')
+beam_args.add_argument('--lm-alpha-to', default=3.2, type=float, help='Language model weight end tuning')
+beam_args.add_argument('--lm-beta-from', default=0.0, type=float,
                        help='Language model word bonus (all words) start tuning')
-beam_args.add_argument('--lm_beta_to', default=0.45, type=float,
+beam_args.add_argument('--lm-beta-to', default=0.45, type=float,
                        help='Language model word bonus (all words) end tuning')
-beam_args.add_argument('--lm_num_alphas', default=45, type=float, help='Number of alpha candidates for tuning')
-beam_args.add_argument('--lm_num_betas', default=8, type=float, help='Number of beta candidates for tuning')
-beam_args.add_argument('--cutoff_top_n', default=40, type=int,
+beam_args.add_argument('--lm-num-alphas', default=45, type=float, help='Number of alpha candidates for tuning')
+beam_args.add_argument('--lm-num-betas', default=8, type=float, help='Number of beta candidates for tuning')
+beam_args.add_argument('--cutoff-top-n', default=40, type=int,
                        help='Cutoff number in pruning, only top cutoff_top_n characters with highest probs in '
                             'vocabulary will be used in beam search, default 40.')
-beam_args.add_argument('--cutoff_prob', default=1.0, type=float,
+beam_args.add_argument('--cutoff-prob', default=1.0, type=float,
                        help='Cutoff probability in pruning,default 1.0, no pruning.')
 
 args = parser.parse_args()
@@ -60,7 +60,7 @@ def decode_dataset(logits, test_dataset, batch_size, lm_alpha, lm_beta, mesh_x, 
         out = torch.from_numpy(logits[i][0])
         sizes = torch.from_numpy(logits[i][1])
 
-        decoded_output, _, _, _ = decoder.decode(out, sizes)
+        decoded_output, _, = decoder.decode(out, sizes)
         target_strings = target_decoder.convert_to_strings(split_targets)
         wer, cer = 0, 0
         for x in range(len(target_strings)):
@@ -92,7 +92,7 @@ if __name__ == '__main__':
                                       normalize=True)
 
     logits = np.load(args.logits)
-    batch_size = logits[0][0].shape[1]
+    batch_size = logits[0][0].shape[0]
 
     results = []
 

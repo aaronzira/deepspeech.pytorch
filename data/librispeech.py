@@ -7,13 +7,17 @@ from utils import create_manifest
 import shutil
 
 parser = argparse.ArgumentParser(description='Processes and downloads LibriSpeech dataset.')
-parser.add_argument("--target_dir", default='LibriSpeech_dataset/', type=str, help="Directory to store the dataset.")
-parser.add_argument('--sample_rate', default=16000, type=int, help='Sample rate')
-parser.add_argument('--files_to_use', default="train-clean-100.tar.gz,"
+parser.add_argument("--target-dir", default='LibriSpeech_dataset/', type=str, help="Directory to store the dataset.")
+parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
+parser.add_argument('--files-to-use', default="train-clean-100.tar.gz,"
                                               "train-clean-360.tar.gz,train-other-500.tar.gz,"
                                               "dev-clean.tar.gz,dev-other.tar.gz,"
                                               "test-clean.tar.gz,test-other.tar.gz", type=str,
                     help='list of file names to download')
+parser.add_argument('--min-duration', default=1, type=int,
+                    help='Prunes training samples shorter than the min duration (given in seconds, default 1)')
+parser.add_argument('--max-duration', default=15, type=int,
+                    help='Prunes training samples longer than the max duration (given in seconds, default 15)')
 args = parser.parse_args()
 
 LIBRI_SPEECH_URLS = {
@@ -24,8 +28,8 @@ LIBRI_SPEECH_URLS = {
     "val": ["http://www.openslr.org/resources/12/dev-clean.tar.gz",
             "http://www.openslr.org/resources/12/dev-other.tar.gz"],
 
-    "test": ["http://www.openslr.org/resources/12/test-clean.tar.gz",
-             "http://www.openslr.org/resources/12/test-other.tar.gz"]
+    "test_clean": ["http://www.openslr.org/resources/12/test-clean.tar.gz"],
+    "test_other": ["http://www.openslr.org/resources/12/test-other.tar.gz"]
 }
 
 
@@ -98,7 +102,10 @@ def main():
 
             print("Finished {}".format(url))
             shutil.rmtree(extracted_dir)
-        create_manifest(split_dir, 'libri_' + split_type)
+        if split_type == 'train':  # Prune to min/max duration
+            create_manifest(split_dir, 'libri_' + split_type + '_manifest.csv', args.min_duration, args.max_duration)
+        else:
+            create_manifest(split_dir, 'libri_' + split_type + '_manifest.csv')
 
 
 if __name__ == "__main__":
