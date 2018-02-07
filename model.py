@@ -43,7 +43,8 @@ class SequenceWise(nn.Module):
 class InferenceBatchSoftmax(nn.Module):
     def forward(self, input_):
         if not self.training:
-            return F.softmax(input_, dim=-1)
+            batch_size = input_.size()[0]
+            return torch.stack([F.softmax(input_[i], dim=1) for i in range(batch_size)], 0)
         else:
             return input_
 
@@ -288,7 +289,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='DeepSpeech model information')
-    parser.add_argument('--model-path', default='models/deepspeech_final.pth',
+    parser.add_argument('--model_path', default='models/deepspeech_final.pth.tar',
                         help='Path to model file created by training')
     args = parser.parse_args()
     package = torch.load(args.model_path, map_location=lambda storage, loc: storage)
